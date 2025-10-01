@@ -7,6 +7,7 @@
 #include "StaticFiles.h"
 #include "Ultradrive.h"
 #include "Config.h"
+#include <ETH.h>
 
 Preferences preferences;
 WiFiServer httpServer(80);
@@ -28,6 +29,18 @@ char passwordBuffer[PASSWORD_MAX_LENGHT];
 unsigned long lastReconnect;
 bool shouldRestart = false;
 unsigned long requestStart;
+
+// ethernet
+static bool ethernetConnected = false;
+static unsigned long lastEthDebug = 0;
+static bool ethUseDhcp = ETH_DEFAULT_USE_DHCP;
+char ethIp[ETH_IP_LENGTH];
+char ethGw[ETH_IP_LENGTH];
+char ethNet[ETH_IP_LENGTH];
+static IPAddress ethernetStaticLocalIp;
+static IPAddress ethernetStaticGateway;
+static IPAddress ethernetStaticSubnet;
+
 
 void logRequestStart(Request &req, Response &res) {
   unsigned long now = millis();
@@ -195,6 +208,17 @@ void updateSettings(Request &req, Response &res) {
     } else if (strcmp(name, AUTO_DISABLE_AP_KEY) == 0) {
       bool isEnabled = (value[0] != '0');
       preferences.putBool(AUTO_DISABLE_AP_KEY, isEnabled);
+    
+    //ethernet
+    } else if (strcmp(name, ETH_USE_DHCP_KEY) == 0) {
+      bool d = (value[0] != '0');
+      preferences.putBool(ETH_USE_DHCP_KEY, d);
+    } else if (strcmp(name, ETH_IP_KEY) == 0) {
+      preferences.putString(ETH_IP_KEY, value);
+    } else if (strcmp(name, ETH_GW_KEY) == 0) {
+      preferences.putString(ETH_GW_KEY, value);
+    } else if (strcmp(name, ETH_NET_KEY) == 0) {
+      preferences.putString(ETH_NET_KEY, value);
     } else {
       preferences.end();
       return res.sendStatus(400);
@@ -324,6 +348,7 @@ void loadPreferences() {
   unsigned long now = millis();
   while (!digitalRead(RESET_PIN)) {
     if (millis() - now > 1000) {
+      Serial.println("Resetting Preferences");
       preferences.clear();
       break;
     }
@@ -346,8 +371,19 @@ void loadPreferences() {
   }
 
   flowControl = preferences.getBool(FLOW_CONTROL_KEY, DEFAULT_FLOW_CONTROL);
-
   autoDisableAP = preferences.getBool(AUTO_DISABLE_AP_KEY, DEFAULT_AUTO_DISABLE_AP);
+
+  // ethernet
+  if (!preferences.getString(ETH_IP_KEY, ethIp, ETH_IP_LENGTH)) {
+    strcpy(ethIp, ETH_DEFAULT_IP);
+  }
+  if (!preferences.getString(ETH_GW_KEY, ethGw, ETH_IP_LENGTH)) {
+    strcpy(ethGw, ETH_DEFAULT_GW);
+  }
+  if (!preferences.getString(ETH_NET_KEY, ethNet, ETH_IP_LENGTH)) {
+    strcpy(ethNet, ETH_DEFAULT_NET);
+  }
+  ethUseDhcp = preferences.getBool(ETH_USE_DHCP_KEY, ETH_DEFAULT_USE_DHCP);
 
   preferences.end();
 }
@@ -378,19 +414,56 @@ void setupHttpServer() {
   httpServer.begin();
 }
 
-void setup() {
-  Serial.begin(38400);
-  UltradriveSerial.setPins(RX2_PIN, TX2_PIN);
-  UltradriveSerial.begin(38400);
-
-  loadPreferences();
-
-  if (flowControl) {
-    deviceManager.enableFlowControl(true);
-    pinMode(RTS_PIN, OUTPUT);
-    pinMode(CTS_PIN, INPUT_PULLUP);
+void onNetworkEventEthernet(arduino_event_id_t event) {
+  switch(event) {
+    case ARDUINO_EVENT_ETH_START:
+      Serial.println("Event: Ethernet started");
+      ETH.setHostname(mdnsName);
+      break;
+    case ARDUINO_EVENT_ETH_CONNECTED:
+      Serial.println("Event: Ethernet connected");
+      break;
+    case ARDUINO_EVENT_ETH_GOT_IP:
+      Serial.println("Event: Ethernet got IP");
+      ethernetConnected = true;
+      break;
+    case ARDUINO_EVENT_ETH_LOST_IP:
+      Serial.println("Event: Ethernet lost IP");
+      ethernetConnected = false;
+      break;
+    case ARDUINO_EVENT_ETH_DISCONNECTED:
+      Serial.println("Event: Ethernet disconnected");
+      ethernetConnected = false;
+      break;
+    case ARDUINO_EVENT_ETH_STOP:
+      Serial.println("Event: Ethernet stopped");
+      ethernetConnected = false;
+      break;
+    default: break;
   }
+}
 
+static inline void setupEthernet() {
+  Network.onEvent(onNetworkEventEthernet);
+  ETH.begin(ETH_PHY_TYPE,\
+            ETH_PHY_ADDR,\
+            ETH_PHY_MDC,\
+            ETH_PHY_MDIO,\
+            ETH_PHY_POWER,\
+            ETH_CLK_MODE);
+  if(ethUseDhcp) {
+    ETH.config();
+  } else {
+    ethernetStaticLocalIp.fromString(ethIp);
+    ethernetStaticGateway.fromString(ethGw);
+    ethernetStaticSubnet.fromString(ethNet);
+    ETH.config(ethernetStaticLocalIp,\
+             ethernetStaticGateway,\
+             ethernetStaticSubnet); //use static IP
+  }
+}
+
+static inline void setupWifi() {
   WiFi.begin();
   unsigned long timeout = millis() + CONNECTION_TIMEOUT;
   while (WiFi.status() != WL_CONNECTED && millis() < timeout) {
@@ -404,6 +477,23 @@ void setup() {
   if (WiFi.status() != WL_CONNECTED || autoDisableAP == false) {
     WiFi.softAP(softApSsid, softApPassword);
   }
+}
+
+void setup() {
+  Serial.begin(38400);
+  UltradriveSerial.setPins(RX2_PIN, TX2_PIN);
+  UltradriveSerial.begin(38400);
+
+  loadPreferences();
+
+  if (flowControl) {
+    deviceManager.enableFlowControl(true);
+    pinMode(RTS_PIN, OUTPUT);
+    pinMode(CTS_PIN, INPUT_PULLUP);
+  }
+
+  setupEthernet();
+  setupWifi();
 
   setupHttpServer();
 
@@ -411,8 +501,55 @@ void setup() {
   MDNS.addService("http", "tcp", 80);
 }
 
+static inline void printEthernetInfo(unsigned long now) {
+  if((now - lastEthDebug) < ETH_DBGPRINT_INTERVAL) return;
+  lastEthDebug = now;
+  /* Print Ethernet information */
+  Serial.println("- - -");  
+  Serial.print("IP configuration: ");
+  Serial.println(ethUseDhcp ? "DHCP" : "static");
+
+  if(!ethUseDhcp) {
+    Serial.print("Static IP Configuration: ");
+    Serial.println(ethIp);
+    Serial.print("Static Gateway Configuration: ");
+    Serial.println(ethGw);
+    Serial.print("Static Subnet Configuration: ");
+    Serial.println(ethNet);
+  }
+
+  Serial.print("Ethernet MAC: ");
+  Serial.println(ETH.macAddress());
+
+  Serial.print("Ethernet ");
+  Serial.println(ETH.connected() ? "connected" : "not connected");
+
+  Serial.print("Ethernet ");
+  Serial.println(ETH.linkUp() ? "link up" : "no link");
+
+  Serial.print("Ethernet ");
+  Serial.println(ETH.fullDuplex() ? "full duplex" : "half duplex");
+  
+  Serial.print("Speed: ");
+  Serial.print(ETH.linkSpeed());
+  Serial.println(" MBit/s");
+
+  if (ETH.hasIP()) {
+    Serial.print("Ethernet local IP: ");
+    Serial.println(ETH.localIP());
+  }
+  else {
+    Serial.println("No Ethernet IP");
+  }
+
+  if (ethernetConnected) {
+    Serial.println(ETH);
+  }
+} 
+
 void loop() {
   unsigned long now = millis();
+  printEthernetInfo(now);
   deviceManager.processIncoming(now);
   processWebServer();
   restartIfNeeded();
