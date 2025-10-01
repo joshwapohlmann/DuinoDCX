@@ -7,6 +7,7 @@
 #include "StaticFiles.h"
 #include "Ultradrive.h"
 #include "Config.h"
+#include <ETH.h>
 
 Preferences preferences;
 WiFiServer httpServer(80);
@@ -28,6 +29,10 @@ char passwordBuffer[PASSWORD_MAX_LENGHT];
 unsigned long lastReconnect;
 bool shouldRestart = false;
 unsigned long requestStart;
+
+// ethernet
+static bool ethernetConnected = false;
+static unsigned long lastEthDebug = 0;
 
 void logRequestStart(Request &req, Response &res) {
   unsigned long now = millis();
@@ -378,19 +383,47 @@ void setupHttpServer() {
   httpServer.begin();
 }
 
-void setup() {
-  Serial.begin(38400);
-  UltradriveSerial.setPins(RX2_PIN, TX2_PIN);
-  UltradriveSerial.begin(38400);
-
-  loadPreferences();
-
-  if (flowControl) {
-    deviceManager.enableFlowControl(true);
-    pinMode(RTS_PIN, OUTPUT);
-    pinMode(CTS_PIN, INPUT_PULLUP);
+void onNetworkEventEthernet(arduino_event_id_t event) {
+  switch(event) {
+    case ARDUINO_EVENT_ETH_START:
+      Serial.println("Event: Ethernet started");
+      ETH.setHostname(mdnsName);
+      break;
+    case ARDUINO_EVENT_ETH_CONNECTED:
+      Serial.println("Event: Ethernet connected");
+      break;
+    case ARDUINO_EVENT_ETH_GOT_IP:
+      Serial.println("Event: Ethernet got IP");
+      ethernetConnected = true;
+      break;
+    case ARDUINO_EVENT_ETH_LOST_IP:
+      Serial.println("Event: Ethernet lost IP");
+      ethernetConnected = false;
+      break;
+    case ARDUINO_EVENT_ETH_DISCONNECTED:
+      Serial.println("Event: Ethernet disconnected");
+      ethernetConnected = false;
+      break;
+    case ARDUINO_EVENT_ETH_STOP:
+      Serial.println("Event: Ethernet stopped");
+      ethernetConnected = false;
+      break;
+    default: break;
   }
+}
 
+static inline void setupEthernet() {
+  Network.onEvent(onNetworkEventEthernet);
+  ETH.begin(ETH_PHY_TYPE,\
+    ETH_PHY_ADDR,\
+    ETH_PHY_MDC,\
+    ETH_PHY_MDIO,\
+    ETH_PHY_POWER,\
+    ETH_CLK_MODE);
+  ETH.config();
+}
+
+static inline void setupWifi() {
   WiFi.begin();
   unsigned long timeout = millis() + CONNECTION_TIMEOUT;
   while (WiFi.status() != WL_CONNECTED && millis() < timeout) {
@@ -404,6 +437,23 @@ void setup() {
   if (WiFi.status() != WL_CONNECTED || autoDisableAP == false) {
     WiFi.softAP(softApSsid, softApPassword);
   }
+}
+
+void setup() {
+  Serial.begin(38400);
+  UltradriveSerial.setPins(RX2_PIN, TX2_PIN);
+  UltradriveSerial.begin(38400);
+
+  loadPreferences();
+
+  if (flowControl) {
+    deviceManager.enableFlowControl(true);
+    pinMode(RTS_PIN, OUTPUT);
+    pinMode(CTS_PIN, INPUT_PULLUP);
+  }
+
+  setupEthernet();
+  setupWifi();
 
   setupHttpServer();
 
@@ -411,8 +461,44 @@ void setup() {
   MDNS.addService("http", "tcp", 80);
 }
 
+static inline void printEthernetInfo(unsigned long now) {
+  if((now - lastEthDebug) < ETH_DBGPRINT_INTERVAL) return;
+  lastEthDebug = now;
+  /* Print Ethernet information */
+  Serial.println("- - -");  
+
+  Serial.print("Ethernet MAC: ");
+  Serial.println(ETH.macAddress());
+
+  Serial.print("Ethernet ");
+  Serial.println(ETH.connected() ? "connected" : "not connected");
+
+  Serial.print("Ethernet ");
+  Serial.println(ETH.linkUp() ? "link up" : "no link");
+
+  Serial.print("Ethernet ");
+  Serial.println(ETH.fullDuplex() ? "full duplex" : "half duplex");
+  
+  Serial.print("Speed: ");
+  Serial.print(ETH.linkSpeed());
+  Serial.println(" MBit/s");
+
+  if (ETH.hasIP()) {
+    Serial.print("Ethernet local IP: ");
+    Serial.println(ETH.localIP());
+  }
+  else {
+    Serial.println("No Ethernet IP");
+  }
+
+  if (ethernetConnected) {
+    Serial.println(ETH);
+  }
+} 
+
 void loop() {
   unsigned long now = millis();
+  printEthernetInfo(now);
   deviceManager.processIncoming(now);
   processWebServer();
   restartIfNeeded();

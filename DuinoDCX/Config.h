@@ -7,8 +7,8 @@
 #define WIFI_HOST_NAME "ultradrive"
 #define DEFAULT_FLOW_CONTROL false
 #define DEFAULT_AUTO_DISABLE_AP false
-#define RX2_PIN 16
-#define TX2_PIN 17
+#define RX2_PIN 14
+#define TX2_PIN 15
 #define RTS_PIN 21
 #define CTS_PIN 22
 #define RESET_PIN 13
@@ -30,3 +30,5 @@
 #define SOFT_AP_SSID_LENGTH 65
 #define SOFT_AP_PASSWORD_LENGTH 65
 #define MDDNS_NAME_LENGTH 65
+
+#define ETH_DBGPRINT_INTERVAL 10000
