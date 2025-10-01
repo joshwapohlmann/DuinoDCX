@@ -11,7 +11,7 @@
 #define TX2_PIN 15
 #define RTS_PIN 21
 #define CTS_PIN 22
-#define RESET_PIN 13
+#define RESET_PIN 12
 #define AUTH_KEY "auth"
 #define SOFT_AP_PASSWORD_KEY "apPassword"
 #define SOFT_AP_SSID_KEY "apSsid"
@@ -32,3 +32,12 @@
 #define MDDNS_NAME_LENGTH 65
 
 #define ETH_DBGPRINT_INTERVAL 10000
+#define ETH_DEFAULT_USE_DHCP true
+#define ETH_DEFAULT_IP "192.168.1.2"
+#define ETH_IP_LENGTH 15
+#define ETH_DEFAULT_GW "192.168.1.1"
+#define ETH_DEFAULT_NET "255.255.255.0"
+#define ETH_USE_DHCP_KEY "ethUseDhcp"
+#define ETH_IP_KEY "ethIp"
+#define ETH_GW_KEY "ethGw"
+#define ETH_NET_KEY "ethNet"
